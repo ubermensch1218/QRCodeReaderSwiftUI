@@ -36,7 +36,7 @@ struct QRCodeReaderView: View {
     
     var body: some View {
         ZStack {
-            QRScanner(result: $scannedCode,isPresented : $isPresented)
+            CodeScanner(result: $scannedCode,isPresented : $isPresented)
             
             VStack {
                 Spacer()
@@ -49,10 +49,115 @@ struct QRCodeReaderView: View {
         .edgesIgnoringSafeArea(.all)
     }
 }
+// MARK: - VisionQRReader
 
+class QRCodeScannerViewController: UIViewController {
+    private var captureSession: AVCaptureSession?
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    
+    var scannedCode: ((String) -> Void)?
+    var dismissAction: (() -> Void)?
+    let objectType : [AVMetadataObject.ObjectType] = [ .qr , .ean8, .ean13, .code128]
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupCaptureSession()
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        startCaptureSession()
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopCaptureSession()
+    }
+    private func setupCaptureSession() {
+        captureSession = AVCaptureSession()
+        
+        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else { return }
+        let videoInput: AVCaptureDeviceInput
+        
+        do {
+            videoInput = try AVCaptureDeviceInput(device: videoCaptureDevice)
+        } catch {
+            return
+        }
+        
+        if (captureSession?.canAddInput(videoInput) ?? false) {
+            captureSession?.addInput(videoInput)
+        } else {
+            return
+        }
+        
+        let metadataOutput = AVCaptureMetadataOutput()
+       
+        if (captureSession?.canAddOutput(metadataOutput) ?? false) {
+            captureSession?.addOutput(metadataOutput)
+            
+            metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+            metadataOutput.metadataObjectTypes = objectType
+        } else {
+            return
+        }
+        
+        previewLayer = AVCaptureVideoPreviewLayer(session: captureSession!)
+        previewLayer?.frame = view.bounds
+        previewLayer?.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(previewLayer!)
+        
+        //captureSession?.startRunning()
+    }
+    
+    private func startCaptureSession() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.captureSession?.startRunning()
+        }
+    }
+    
+    private func stopCaptureSession() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.captureSession?.stopRunning()
+        }
+    }
+}
 
-// MARK: - QRCodeReaderViewController
-class QRScannerController: UIViewController {
+extension QRCodeScannerViewController: AVCaptureMetadataOutputObjectsDelegate {
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard let metadataObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject else { return }
+        
+        if objectType.contains( metadataObject.type){
+            scannedCode?(metadataObject.stringValue ?? "")
+            dismissAction?()
+        }
+    }
+}
+
+struct CodeScanner: UIViewControllerRepresentable {
+    @Binding var result: String
+    @Binding var isPresented: Bool
+    
+    func makeUIViewController(context: Context) -> QRCodeScannerViewController {
+        let controller = QRCodeScannerViewController()
+        controller.scannedCode = { code in
+            self.result = code
+        }
+        controller.dismissAction = {
+            self.isPresented = false
+        }
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: QRCodeScannerViewController, context: Context) {
+    }
+}
+// MARK: - QRAVCodeReaderViewController
+class QRScannerControllerAV: UIViewController {
     var captureSession = AVCaptureSession()
     var videoPreviewLayer: AVCaptureVideoPreviewLayer?
     var qrCodeFrameView: UIView?
@@ -121,17 +226,17 @@ class QRScannerController: UIViewController {
     }
     
 }
-struct QRScanner: UIViewControllerRepresentable {
+struct QRScannerAV: UIViewControllerRepresentable {
     @Binding var result: String
     @Binding var isPresented: Bool
     
-    func makeUIViewController(context: Context) -> QRScannerController {
-        let controller = QRScannerController()
+    func makeUIViewController(context: Context) -> QRScannerControllerAV {
+        let controller = QRScannerControllerAV()
         controller.delegate = context.coordinator
         return controller
     }
     
-    func updateUIViewController(_ uiViewController: QRScannerController, context: Context) {
+    func updateUIViewController(_ uiViewController: QRScannerControllerAV, context: Context) {
     }
     func makeCoordinator() -> Coordinator {
         Coordinator($result, $isPresented)
@@ -168,7 +273,7 @@ struct QRScanner: UIViewControllerRepresentable {
             hasScanned = true
             isPresented = false
             // Stop the scanning session
-            if let controller = UIApplication.shared.windows.first?.rootViewController?.children.first as? QRScannerController {
+            if let controller = UIApplication.shared.windows.first?.rootViewController?.children.first as? QRScannerControllerAV {
                 controller.stopScanning()
             }
         }
